@@ -1,0 +1,124 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function verified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    // 管理者：config/allowlist 的 emails 陣列（全部小寫），只能在 Firebase 後台編輯
+    function isAdmin() {
+      return verified()
+        && request.auth.token.email.lower() in get(/databases/$(database)/documents/config/allowlist).data.emails;
+    }
+
+    // 成員：用邀請碼加入的人
+    function isMember() {
+      return verified() && exists(/databases/$(database)/documents/members/$(request.auth.uid));
+    }
+
+    function allowed() {
+      return isAdmin() || isMember();
+    }
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid && allowed();
+    }
+
+    // 樂觀鎖：版本號必須剛好 +1，更新時間必須是伺服器時間
+    function validSyncWrite() {
+      let d = request.resource.data;
+      return d.updatedAt == request.time
+        && d.deleted is bool
+        && d.version == (resource == null ? 1 : resource.data.version + 1);
+    }
+
+    match /config/{doc} {
+      allow read, write: if false;
+    }
+
+    match /users/{uid}/{col}/{id} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && validSyncWrite();
+      // 平常一律用刪除標記；只有「刪除我的帳號」會真正刪除，而且只能刪自己的
+      allow delete: if isOwner(uid);
+    }
+
+    // ── 邀請碼 ─────────────────────────────────────────────
+    // 兌換：在同一個交易裡「使用次數 +1、記下兌換者」並建立 members/{uid}
+    function validRedeem() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let me = /databases/$(database)/documents/members/$(request.auth.uid);
+      return verified()
+        && !exists(me)
+        && existsAfter(me)
+        && before.disabled == false
+        && before.uses < before.maxUses
+        && (before.expiresAt == null || before.expiresAt > request.time)
+        && after.diff(before).affectedKeys().hasOnly(['uses', 'redeemers'])
+        && after.uses == before.uses + 1
+        && after.redeemers.size() == before.redeemers.size() + 1
+        && after.redeemers[after.redeemers.size() - 1].uid == request.auth.uid;
+    }
+
+    match /invites/{code} {
+      // 知道邀請碼的人才能讀到那一組；只有管理者能列出全部
+      allow get: if verified();
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['maxUses', 'uses', 'expiresAt', 'disabled', 'note', 'createdBy', 'createdAt', 'redeemers'])
+        && request.resource.data.maxUses is int
+        && request.resource.data.maxUses >= 1
+        && request.resource.data.maxUses <= 100
+        && request.resource.data.uses == 0
+        && request.resource.data.redeemers.size() == 0
+        && request.resource.data.disabled == false
+        && (request.resource.data.expiresAt == null || request.resource.data.expiresAt is timestamp)
+        && request.resource.data.note is string
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+      // 管理者只能停用（產生後不能修改次數或期限）
+      allow update: if (isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['disabled'])
+          && request.resource.data.disabled == true)
+        || validRedeem();
+      allow delete: if false;
+    }
+
+    match /members/{uid} {
+      allow get: if (request.auth != null && request.auth.uid == uid) || isAdmin();
+      allow list: if isAdmin();
+      // 只能在兌換邀請碼的同一個交易裡建立自己的成員資格
+      allow create: if verified()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['email', 'code', 'joinedAt'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.joinedAt == request.time
+        && getAfter(/databases/$(database)/documents/invites/$(request.resource.data.code)).data.uses
+           == get(/databases/$(database)/documents/invites/$(request.resource.data.code)).data.uses + 1;
+      allow update: if false;
+      // 本人（刪除帳號）或管理者（移除成員）可以刪除
+      allow delete: if (request.auth != null && request.auth.uid == uid) || isAdmin();
+    }
+
+    // ── 共用股價：成員都可以讀寫（抓價在使用者端執行） ──────────
+    match /prices/{id} {
+      allow read: if allowed();
+      allow create, update: if allowed()
+        && request.resource.data.keys().hasOnly(['symbol', 'year', 'closes', 'coveredFrom', 'coveredTo', 'updatedAt'])
+        && request.resource.data.closes is map
+        && request.resource.data.coveredFrom is string
+        && request.resource.data.coveredTo is string
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /market/{id} {
+      allow read: if allowed();
+      allow create, update: if allowed() && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+  }
+}
