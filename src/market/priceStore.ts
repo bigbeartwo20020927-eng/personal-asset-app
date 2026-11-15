@@ -33,6 +33,8 @@ export function onFillStatus(fn: Listener): () => void {
 const THROTTLE_MS = 60 * 60 * 1000;
 const lastAttempt = new Map<string, number>();
 let running: Promise<void> | null = null;
+let queued: Promise<void> | null = null;
+let queuedArgs: { needs: Map<string, ISODate>; listed: (symbol: string) => boolean; force: boolean } | null = null;
 
 function fromCloud(id: string, data: Record<string, unknown>): PriceYearDoc {
   const ts = data.updatedAt as Timestamp | undefined;
@@ -110,7 +112,17 @@ async function fillOne(symbol: string, from: ISODate, to: ISODate, listed: boole
  * needs：股票代號 → 第一筆紀錄的日期；listed：是否為上市股票（決定能否用證交所備援）
  */
 export function ensurePrices(needs: Map<string, ISODate>, listed: (symbol: string) => boolean, force = false): Promise<void> {
-  if (running) return running;
+  if (running) {
+    // 正在抓的那一輪用的是舊的股票清單；記下最新的需求，等它結束後再補跑一輪（多次呼叫只補跑一次）
+    queuedArgs = { needs, listed, force: force || (queuedArgs?.force ?? false) };
+    queued ??= running.then(() => {
+      const a = queuedArgs!;
+      queued = null;
+      queuedArgs = null;
+      return ensurePrices(a.needs, a.listed, a.force);
+    });
+    return queued;
+  }
   const to = todayFn();
   const list = [...needs.entries()];
   if (list.length === 0) return Promise.resolve();

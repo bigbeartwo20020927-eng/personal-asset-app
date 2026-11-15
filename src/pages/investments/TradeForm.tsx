@@ -91,7 +91,7 @@ export default function TradeForm({ edit, defaultSymbol, onClose }: { edit?: Tra
     return replayPortfolio(others, 'avg', addDays(exDate, -1)).get(symbol, accountId).shares;
   }, [kind, exDate, symbol, data.trades, edit, accountId]);
   const perShare = matchedDiv && matchedDiv.exDate === exDate ? matchedDiv.perShare : null;
-  const suggested = perShare != null && heldBeforeEx > 0 ? Math.floor(perShare * heldBeforeEx) : null;
+  const suggested = perShare != null && heldBeforeEx > 0 ? Math.floor(Math.round(perShare * heldBeforeEx * 1e4) / 1e4) : null; // 先四捨五入到小數 4 位，避免 4.35 × 100 = 434.99999 被捨去成 434
 
   // 依券商設定試算手續費與證交稅
   const estimate = useMemo(() => {
@@ -127,6 +127,8 @@ export default function TradeForm({ edit, defaultSymbol, onClose }: { edit?: Tra
 
   const options = useMemo(() => [...symbols.values()].sort((a, b) => a.code.localeCompare(b.code)), [symbols]);
 
+  const liveSub = (id: string | null) => (id && data.subById.has(id) ? id : null);
+
   const build = (): DocData<Trade> | string => {
     if (!symbol) return '請輸入股票代號';
     if (!account) return '請選擇券商帳戶';
@@ -136,7 +138,7 @@ export default function TradeForm({ edit, defaultSymbol, onClose }: { edit?: Tra
     if (kind === 'dayTrade' && !(Number(sellPrice) > 0)) return '請輸入賣出價';
     if (kind === 'cashDividend' && !(Number(amount) > 0)) return '請輸入股利金額';
     if (kind === 'cashDividend' && exDate && exDate > date) return '除息日不能晚於入帳日';
-    if (kind === 'cashDividend' && (Number(divFee) || 0) >= Number(amount)) return '入帳手續費不能大於股利金額';
+    if (kind === 'cashDividend' && (Number(divFee) || 0) >= Number(amount)) return '入帳手續費必須小於股利金額';
     const settle = isDividend ? date : settleDateOf(date);
     return {
       kind,
@@ -151,7 +153,8 @@ export default function TradeForm({ edit, defaultSymbol, onClose }: { edit?: Tra
       settleDate: settle,
       accountId,
       // 交割從哪個子帳戶：新增時依帳戶設定帶入，之後改設定不影響過去的紀錄
-      subAccountId: edit && edit.accountId === accountId ? edit.subAccountId : (account.settleSubAccountId ?? null),
+      // 記的子帳戶如果已經刪除，改成「未分配」
+      subAccountId: liveSub(edit && edit.accountId === accountId ? edit.subAccountId : (account.settleSubAccountId ?? null)),
       amount: kind === 'cashDividend' ? Math.round(Number(amount)) : null,
       exDate: kind === 'cashDividend' && exDate ? exDate : null,
       createdAt: edit?.createdAt ?? Date.now(),

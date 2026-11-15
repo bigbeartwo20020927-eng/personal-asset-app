@@ -56,21 +56,26 @@ export async function commit(ops: WriteOp[]): Promise<void> {
   const u = uid();
   const refs = ops.map((op) => doc(fs(), 'users', u, op.col, op.id));
 
+  // 每份文件實際寫入的版本號（交易可能重試，所以每次重算）
+  let versions: number[] = [];
   try {
     await runTransaction(fs(), async (tx) => {
       const snaps = await Promise.all(refs.map((r) => tx.get(r)));
       const conflicts: { col: CollectionName; id: string; deleted: boolean }[] = [];
-      snaps.forEach((s, i) => {
+      versions = snaps.map((s, i) => {
+        const op = ops[i];
         const cloud = s.exists() ? (s.data().version as number) : 0;
-        if (cloud !== ops[i].expectedVersion) {
-          conflicts.push({ col: ops[i].col, id: ops[i].id, deleted: s.exists() && s.data().deleted === true });
-        }
+        const tombstone = s.exists() && s.data().deleted === true;
+        // 用固定 id 的文件（例如預算的 id 就是分類 id）刪除後，雲端還留著刪除標記。
+        // 重新建立時本機已經沒有這份文件（預期版本 0），要接在刪除標記的版本後面，不算衝突。
+        if (op.expectedVersion === 0 && op.data !== null && tombstone) return cloud + 1;
+        if (cloud !== op.expectedVersion) conflicts.push({ col: op.col, id: op.id, deleted: tombstone });
+        return op.expectedVersion + 1;
       });
       if (conflicts.length) throw new ConflictError(conflicts);
       ops.forEach((op, i) => {
-        const version = op.expectedVersion + 1;
         const body = op.data === null ? { deleted: true } : { ...op.data, deleted: false };
-        tx.set(refs[i], { ...body, version, updatedAt: serverTimestamp() });
+        tx.set(refs[i], { ...body, version: versions[i], updatedAt: serverTimestamp() });
       });
     });
   } catch (e) {
@@ -80,11 +85,10 @@ export async function commit(ops: WriteOp[]): Promise<void> {
   }
 
   // 寫入成功 → 先更新本機，稍後即時監聽收到的雲端版本會再覆蓋一次
-  for (const op of ops) {
+  for (const [i, op] of ops.entries()) {
     const t = table(op.col);
     if (op.data === null) await t.delete(op.id);
-    else
-      await t.put({ ...op.data, id: op.id, version: op.expectedVersion + 1, updatedAt: Date.now(), deleted: false } as never);
+    else await t.put({ ...op.data, id: op.id, version: versions[i], updatedAt: Date.now(), deleted: false } as never);
   }
 }
 
