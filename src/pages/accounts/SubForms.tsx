@@ -35,12 +35,10 @@ export function SubAccountForm({ data, account, edit, onClose }: { data: Account
   const remove = async () => {
     if (!edit) return;
     const bal = balanceAt(data.ledger, account.id, '9999-12-31', edit.id);
-    const msg = bal !== 0 ? `子帳戶「${edit.name}」還有 ${fmt(bal, account.currency)}，刪除後會自動劃撥回「未分配」。確定刪除？` : `確定刪除子帳戶「${edit.name}」？`;
+    const msg = bal !== 0 ? `子帳戶「${edit.name}」還有 ${fmt(bal, account.currency)}，刪除後會回到「未分配」，過去記在這個子帳戶的紀錄也會改算在「未分配」。確定刪除？` : `確定刪除子帳戶「${edit.name}」？`;
     if (!confirm(msg)) return;
+    // 不必另外寫一筆劃撥：子帳戶刪除後，指向它的紀錄在讀取時都會算進「未分配」（見 domain/subs.ts）
     const ops: WriteOp[] = [deleteOp('subAccounts', edit)];
-    if (bal !== 0) {
-      ops.push(createOp('allocations', { accountId: account.id, fromSubId: edit.id, toSubId: null, amount: bal, date: today(), note: `刪除子帳戶「${edit.name}」` }));
-    }
     const patch: WriteOp[] = account.settleSubAccountId === edit.id ? [updateOp('accounts', account, { settleSubAccountId: null })] : [];
     const ok = await act(() => commit([...ops, ...patch]), '已刪除');
     if (ok) onClose();

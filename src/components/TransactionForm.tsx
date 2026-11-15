@@ -71,10 +71,13 @@ function TransactionForm({ edit, defaults, onClose }: { edit?: Transaction; defa
   const [note, setNote] = useState(edit?.note ?? '');
   const [busy, setBusy] = useState(false);
 
-  // 第一次載入時帳戶資料可能還沒到
+  // 表單剛打開時帳戶資料通常還沒讀到（上面的初始值會是空的），
+  // 讀到後在這裡帶入「上次使用的帳戶」；沒有或已封存才用第一個帳戶
   useEffect(() => {
-    if (!accountId && firstAccount) setAccountId(firstAccount);
-  }, [accountId, firstAccount]);
+    if (accountId || !firstAccount) return;
+    const last = data.accountById.get(lastAccount);
+    setAccountId(last && !last.archived ? last.id : firstAccount);
+  }, [accountId, firstAccount, lastAccount, data.accountById]);
 
   const from = data.accountById.get(accountId);
   const to = data.accountById.get(toAccountId);
@@ -209,7 +212,8 @@ function TransactionForm({ edit, defaults, onClose }: { edit?: Transaction; defa
     setAmount(String(t.amount));
     if (data.accountById.has(t.accountId)) {
       setAccountId(t.accountId);
-      setSubId(t.subAccountId);
+      // 範本記的子帳戶可能已經刪除，這時改用「未分配」
+      setSubId(t.subAccountId && data.subById.has(t.subAccountId) ? t.subAccountId : null);
     }
     setCategoryId(t.categoryId);
     setTags(t.tags);

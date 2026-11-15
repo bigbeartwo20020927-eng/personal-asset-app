@@ -1,17 +1,28 @@
+import { useLiveQuery } from 'dexie-react-hooks';
 import { useMemo } from 'react';
 import { buildLedger, type LedgerEvent } from '../domain/ledger';
+import { dropDeadSubs } from '../domain/subs';
 import { useCol } from '../hooks';
+import { table } from '../sync/localDb';
 import type { Account, Category, SubAccount } from '../types';
 
 /** 帳戶相關的資料一次取齊，並建好帳本（所有金額變動） */
 export function useAccountsData() {
   const accounts = useCol('accounts');
-  const subAccounts = useCol('subAccounts');
-  const allocations = useCol('allocations');
-  const transactions = useCol('transactions');
-  const trades = useCol('trades');
+  // 子帳戶要分得出「還沒讀到」和「真的沒有」：還沒讀到時不能把紀錄誤判成指向已刪除的子帳戶
+  const subsRaw = useLiveQuery(() => table('subAccounts').toArray(), []);
+  const subAccounts = useMemo(() => subsRaw ?? [], [subsRaw]);
+  const rawAllocations = useCol('allocations');
+  const rawTransactions = useCol('transactions');
+  const rawTrades = useCol('trades');
   const categories = useCol('categories');
   const debts = useCol('debts');
+
+  // 指向已刪除子帳戶的紀錄一律當成「未分配」
+  const { transactions, trades, allocations } = useMemo(() => {
+    const input = { transactions: rawTransactions, trades: rawTrades, allocations: rawAllocations };
+    return subsRaw ? dropDeadSubs(input, new Set(subsRaw.map((s) => s.id))) : input;
+  }, [subsRaw, rawTransactions, rawTrades, rawAllocations]);
 
   const ledger = useMemo(
     () => buildLedger({ accounts, transactions, allocations, trades }),
