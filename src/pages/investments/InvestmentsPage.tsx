@@ -69,7 +69,8 @@ export default function InvestmentsPage() {
     [inv.trades, inv.costOpts, inv.ctx, first, inv.today, gran],
   );
   const names = useMemo(() => new Map([...inv.symbols.values()].map((s) => [s.code, s.name])), [inv.symbols]);
-  const held = inv.holdings.filter((h) => h.position.shares > 0);
+  // 持股列表依股票代號排序（下面的「持股配置」另外依市值排序）
+  const held = inv.holdings.filter((h) => h.position.shares > 0).sort((a, b) => a.symbol.localeCompare(b.symbol));
   // 持股列表依券商分組
   const byBroker = useMemo(() => {
     const m = new Map<string, typeof held>();

@@ -98,17 +98,16 @@ export default function TxList({
     );
   };
 
-  const amountFor = (t: Transaction): { value: number; currency: string } => {
+  const amountFor = (t: Transaction): { value: number; currency: string; neutral?: boolean } => {
     const from = data.accountById.get(t.accountId);
     const to = t.toAccountId ? data.accountById.get(t.toAccountId) : undefined;
     const fromCur = from?.currency ?? 'TWD';
     if (t.type === 'income') return { value: t.amount, currency: fromCur };
     if (t.type === 'expense' || t.type === 'debtPayment') return { value: -t.amount, currency: fromCur };
-    // 轉帳
-    if (perspective) {
-      const isFrom = t.accountId === perspective.accountId && (perspective.subId === undefined || t.subAccountId === perspective.subId);
-      if (!isFrom) return { value: t.toAmount ?? t.amount, currency: to?.currency ?? fromCur };
-    }
+    // 轉帳：不是從某個帳戶的角度看時（收支統計頁），錢只是換位置，不算正也不算負；手續費另外寫在說明裡
+    if (!perspective) return { value: t.amount, currency: fromCur, neutral: true };
+    const isFrom = t.accountId === perspective.accountId && (perspective.subId === undefined || t.subAccountId === perspective.subId);
+    if (!isFrom) return { value: t.toAmount ?? t.amount, currency: to?.currency ?? fromCur };
     // 轉出方：手續費由轉出帳戶負擔
     return { value: -(t.amount + (t.fee ?? 0)), currency: fromCur };
   };
@@ -148,7 +147,7 @@ export default function TxList({
                     {t.note && <span className="ml-1.5">{t.note}</span>}
                   </div>
                 </div>
-                <Money value={a.value} currency={a.currency} colored className="text-sm font-medium" />
+                <Money value={a.value} currency={a.currency} colored neutral={a.neutral} className="text-sm font-medium" />
               </button>
             );
           })}

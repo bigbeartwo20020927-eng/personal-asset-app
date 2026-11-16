@@ -24,7 +24,6 @@ const TxCtx = createContext<Ctx>({ openTx: () => {} });
 export const useTxForm = () => useContext(TxCtx);
 
 const TYPE_LABEL: Record<Exclude<TransactionType, 'debtPayment'>, string> = { expense: '支出', income: '收入', transfer: '轉帳' };
-const LAST_ACCOUNT_KEY = 'lastAccountId';
 
 function curName(code: string) {
   return CURRENCIES.find((c) => c.code === code)?.name ?? code;
@@ -47,18 +46,13 @@ function TransactionForm({ edit, defaults, onClose }: { edit?: Transaction; defa
   const act = useAction();
   const toast = useToast();
 
-  const lastAccount = (() => {
-    try {
-      return localStorage.getItem(LAST_ACCOUNT_KEY) ?? '';
-    } catch {
-      return '';
-    }
-  })();
-  const firstAccount = data.accounts.find((a) => !a.archived)?.id ?? '';
+  // 預設帳戶：「現金」類的第一個帳戶（和帳戶頁的排列順序相同）；沒有現金帳戶才用第一個帳戶
+  const usable = data.accounts.filter((a) => !a.archived);
+  const firstAccount = (usable.find((a) => a.type === 'cash') ?? usable[0])?.id ?? '';
 
   const [type, setType] = useState<TransactionType>(edit?.type ?? defaults?.type ?? 'expense');
   const [amount, setAmount] = useState(edit ? String(edit.amount) : '');
-  const [accountId, setAccountId] = useState(edit?.accountId ?? defaults?.accountId ?? (data.accountById.has(lastAccount) ? lastAccount : firstAccount));
+  const [accountId, setAccountId] = useState(edit?.accountId ?? defaults?.accountId ?? firstAccount);
   const [subId, setSubId] = useState<string | null>(edit?.subAccountId ?? defaults?.subAccountId ?? null);
   const [toAccountId, setToAccountId] = useState(edit?.toAccountId ?? defaults?.toAccountId ?? '');
   const [toSubId, setToSubId] = useState<string | null>(edit?.toSubAccountId ?? defaults?.toSubAccountId ?? null);
@@ -71,13 +65,10 @@ function TransactionForm({ edit, defaults, onClose }: { edit?: Transaction; defa
   const [note, setNote] = useState(edit?.note ?? '');
   const [busy, setBusy] = useState(false);
 
-  // 表單剛打開時帳戶資料通常還沒讀到（上面的初始值會是空的），
-  // 讀到後在這裡帶入「上次使用的帳戶」；沒有或已封存才用第一個帳戶
+  // 表單剛打開時帳戶資料通常還沒讀到（上面的初始值會是空的），讀到後在這裡帶入預設帳戶
   useEffect(() => {
-    if (accountId || !firstAccount) return;
-    const last = data.accountById.get(lastAccount);
-    setAccountId(last && !last.archived ? last.id : firstAccount);
-  }, [accountId, firstAccount, lastAccount, data.accountById]);
+    if (!accountId && firstAccount) setAccountId(firstAccount);
+  }, [accountId, firstAccount]);
 
   const from = data.accountById.get(accountId);
   const to = data.accountById.get(toAccountId);
@@ -161,14 +152,7 @@ function TransactionForm({ edit, defaults, onClose }: { edit?: Transaction; defa
     const op: WriteOp = edit ? updateOp('transactions', edit, d) : createOp('transactions', d);
     const ok = await act(() => commit([op]), edit ? '已更新' : '已記錄');
     setBusy(false);
-    if (ok) {
-      try {
-        localStorage.setItem(LAST_ACCOUNT_KEY, accountId);
-      } catch {
-        // 不能存就算了
-      }
-      onClose();
-    }
+    if (ok) onClose();
   };
 
   const remove = async () => {
