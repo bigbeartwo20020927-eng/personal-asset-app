@@ -1,12 +1,25 @@
 import { fmt } from '../format';
 
-export function Money({ value, currency = 'TWD', colored = false, className = '' }: { value: number; currency?: string; colored?: boolean; className?: string }) {
-  const color = colored ? (value > 0 ? 'text-emerald-600' : value < 0 ? 'text-red-600' : '') : value < 0 ? 'text-red-600' : '';
+/** neutral：不分正負（例如轉帳只是錢換位置），顯示絕對值、灰色、不加正負號 */
+export function Money({
+  value,
+  currency = 'TWD',
+  colored = false,
+  neutral = false,
+  className = '',
+}: {
+  value: number;
+  currency?: string;
+  colored?: boolean;
+  neutral?: boolean;
+  className?: string;
+}) {
+  const color = neutral ? 'text-slate-500' : colored ? (value > 0 ? 'text-emerald-600' : value < 0 ? 'text-red-600' : '') : value < 0 ? 'text-red-600' : '';
   return (
     <span className={`tabular-nums ${color} ${className}`}>
       {currency !== 'TWD' && <span className="mr-1 text-xs text-slate-400">{currency}</span>}
-      {colored && value > 0 ? '+' : ''}
-      {fmt(value, currency)}
+      {colored && !neutral && value > 0 ? '+' : ''}
+      {fmt(neutral ? Math.abs(value) : value, currency)}
     </span>
   );
 }
