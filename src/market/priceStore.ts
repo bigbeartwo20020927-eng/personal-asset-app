@@ -31,7 +31,44 @@ export function onFillStatus(fn: Listener): () => void {
 
 /** 同一支股票一小時內最多自動查一次（按刷新按鈕不受限制） */
 const THROTTLE_MS = 60 * 60 * 1000;
-const lastAttempt = new Map<string, number>();
+/** 上次自動查詢的時間存在本機，重新開啟 APP 後一小時限制依然有效 */
+const ATTEMPT_KEY = 'priceAttempt:v1';
+function readAttempts(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(ATTEMPT_KEY) ?? '{}') as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+function lastAttemptOf(symbol: string): number {
+  return readAttempts()[symbol] ?? 0;
+}
+function markAttempt(symbol: string): void {
+  const now = Date.now();
+  const all = readAttempts();
+  all[symbol] = now;
+  // 順便清掉超過一小時的紀錄，避免越存越多
+  for (const k of Object.keys(all)) if (now - all[k] >= THROTTLE_MS) delete all[k];
+  try {
+    localStorage.setItem(ATTEMPT_KEY, JSON.stringify(all));
+  } catch {
+    // 存不了就只在這次開啟期間有效
+  }
+}
+
+/**
+ * 一輪補股價期間要寫進本機的文件先收集在這裡，整輪結束才一次寫入。
+ * 本機股價每寫一次，畫面就要重算一次；一支一支寫的話，股票越多越卡。
+ */
+type WriteBuffer = Map<string, PriceYearDoc>;
+
+/** 兩份文件的內容是否相同（不比較 updatedAt） */
+function sameDoc(a: PriceYearDoc, b: PriceYearDoc): boolean {
+  if (a.coveredFrom !== b.coveredFrom || a.coveredTo !== b.coveredTo) return false;
+  const ka = Object.keys(a.closes);
+  if (ka.length !== Object.keys(b.closes).length) return false;
+  return ka.every((k) => a.closes[k] === b.closes[k]);
+}
 let running: Promise<void> | null = null;
 let queued: Promise<void> | null = null;
 let queuedArgs: { needs: Map<string, ISODate>; listed: (symbol: string) => boolean; force: boolean } | null = null;
@@ -50,7 +87,7 @@ function fromCloud(id: string, data: Record<string, unknown>): PriceYearDoc {
 }
 
 /** 先看本機；本機沒有的年度、以及今年的文件，向雲端讀取（其他使用者可能已經抓好了） */
-async function loadDocs(symbol: string, from: ISODate, to: ISODate): Promise<PriceYearDoc[]> {
+async function loadDocs(symbol: string, from: ISODate, to: ISODate, buffer: WriteBuffer): Promise<PriceYearDoc[]> {
   const y0 = Number(from.slice(0, 4));
   const y1 = Number(to.slice(0, 4));
   const out: PriceYearDoc[] = [];
@@ -66,7 +103,8 @@ async function loadDocs(symbol: string, from: ISODate, to: ISODate): Promise<Pri
       const snap = await getDoc(doc(fs(), 'prices', id));
       if (snap.exists()) {
         const cloud = fromCloud(id, snap.data());
-        await db.prices.put(cloud);
+        // 和本機一樣就不寫，免得畫面白白重算
+        if (!local || !sameDoc(local, cloud)) buffer.set(id, cloud);
         out.push(cloud);
       } else if (local) out.push(local);
     } catch {
@@ -86,13 +124,12 @@ async function fetchRange(symbol: string, from: ISODate, to: ISODate, listed: bo
   }
 }
 
-async function fillOne(symbol: string, from: ISODate, to: ISODate, listed: boolean, force: boolean): Promise<void> {
-  const docs = await loadDocs(symbol, from, to);
+async function fillOne(symbol: string, from: ISODate, to: ISODate, listed: boolean, force: boolean, buffer: WriteBuffer): Promise<void> {
+  const docs = await loadDocs(symbol, from, to, buffer);
   const gap = missingRange(docs, { from, to });
   if (!gap) return;
-  const last = lastAttempt.get(symbol) ?? 0;
-  if (!force && Date.now() - last < THROTTLE_MS) return;
-  lastAttempt.set(symbol, Date.now());
+  if (!force && Date.now() - lastAttemptOf(symbol) < THROTTLE_MS) return;
+  markAttempt(symbol);
 
   const rows = await fetchRange(symbol, gap.from, gap.to, listed);
   const changed = mergeCloses(symbol, docs, gap, rows);
@@ -103,7 +140,7 @@ async function fillOne(symbol: string, from: ISODate, to: ISODate, listed: boole
       { symbol, year: d.year, closes: d.closes, coveredFrom: d.coveredFrom, coveredTo: d.coveredTo, updatedAt: serverTimestamp() },
       { merge: true },
     );
-    await db.prices.put({ ...d, updatedAt: Date.now() });
+    buffer.set(d.id, { ...d, updatedAt: Date.now() });
   }
 }
 
@@ -130,15 +167,21 @@ export function ensurePrices(needs: Map<string, ISODate>, listed: (symbol: strin
     emit({ running: true, done: 0, total: list.length, error: null, failed: [] });
     const failed: string[] = [];
     let error: string | null = null;
-    for (let i = 0; i < list.length; i++) {
-      const [symbol, from] = list[i];
-      try {
-        await fillOne(symbol, from, to, listed(symbol), force);
-      } catch (e) {
-        failed.push(symbol);
-        error = e instanceof Error ? e.message : String(e);
+    const buffer: WriteBuffer = new Map();
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const [symbol, from] = list[i];
+        try {
+          await fillOne(symbol, from, to, listed(symbol), force, buffer);
+        } catch (e) {
+          failed.push(symbol);
+          error = e instanceof Error ? e.message : String(e);
+        }
+        emit({ done: i + 1 });
       }
-      emit({ done: i + 1 });
+    } finally {
+      // 整輪一次寫入本機，畫面只重算一次（雲端在每支查完時就已經寫好了）
+      if (buffer.size > 0) await db.prices.bulkPut([...buffer.values()]);
     }
     emit({ running: false, failed, error });
   })().finally(() => {
