@@ -106,6 +106,10 @@ export default function TxList({
     if (t.type === 'expense' || t.type === 'debtPayment') return { value: -t.amount, currency: fromCur };
     // 轉帳：不是從某個帳戶的角度看時（收支統計頁），錢只是換位置，不算正也不算負；手續費另外寫在說明裡
     if (!perspective) return { value: t.amount, currency: fromCur, neutral: true };
+    // 同一個帳戶的子帳戶互轉，從帳戶整體來看錢沒有離開，同樣用中性顯示（手續費寫在說明裡）
+    if (perspective.subId === undefined && t.accountId === perspective.accountId && t.toAccountId === perspective.accountId) {
+      return { value: t.amount, currency: fromCur, neutral: true };
+    }
     const isFrom = t.accountId === perspective.accountId && (perspective.subId === undefined || t.subAccountId === perspective.subId);
     if (!isFrom) return { value: t.toAmount ?? t.amount, currency: to?.currency ?? fromCur };
     // 轉出方：手續費由轉出帳戶負擔
