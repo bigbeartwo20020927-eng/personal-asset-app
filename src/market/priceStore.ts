@@ -189,13 +189,3 @@ export function ensurePrices(needs: Map<string, ISODate>, listed: (symbol: strin
   });
   return running;
 }
-
-/** 手動輸入某天的收盤價（所有資料來源都失敗時的保底） */
-export async function setManualClose(symbol: string, date: ISODate, close: number): Promise<void> {
-  const y = Number(date.slice(0, 4));
-  const id = priceDocId(symbol, y);
-  const local = (await db.prices.get(id)) ?? { id, symbol, year: y, closes: {}, coveredFrom: '9999-12-31', coveredTo: '0000-01-01', updatedAt: 0 };
-  const next: PriceYearDoc = { ...local, closes: { ...local.closes, [date.slice(5)]: close }, updatedAt: Date.now() };
-  await setDoc(doc(fs(), 'prices', id), { symbol, year: y, closes: { [date.slice(5)]: close }, coveredFrom: local.coveredFrom, coveredTo: local.coveredTo, updatedAt: serverTimestamp() }, { merge: true });
-  await db.prices.put(next);
-}

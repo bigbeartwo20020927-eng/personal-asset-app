@@ -43,7 +43,7 @@ export function PriceStatus({ inv }: { inv: InvestmentsData }) {
         {status.running
           ? `更新股價中… ${status.done}/${status.total}`
           : status.failed.length
-            ? `⚠ ${status.failed.join('、')} 抓取失敗（${status.error ?? ''}），可在個股頁手動輸入股價`
+            ? `⚠ ${status.failed.join('、')} 抓取失敗（${status.error ?? ''}），請稍後再按刷新`
             : latest
               ? `股價更新到 ${latest}`
               : '尚未取得股價'}
