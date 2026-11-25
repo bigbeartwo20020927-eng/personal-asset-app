@@ -1,8 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import Modal from '../../components/Modal';
 import { GranularityPicker } from '../../components/SeriesChart';
-import { useAction } from '../../components/Toast';
 import { Empty, Money } from '../../components/ui';
 import { combineRows, useInvestments } from '../../data/useInvestments';
 import { portfolioCashFlows, portfolioSeries } from '../../domain/portfolio';
@@ -11,7 +9,6 @@ import { sortTrades } from '../../domain/trades';
 import { valueLot } from '../../domain/valuation';
 import { xirr } from '../../domain/xirr';
 import { fmtPct } from '../../format';
-import { setManualClose } from '../../market/priceStore';
 import type { Trade } from '../../types';
 import { ToggleLines, type MetricDef } from './charts';
 import { PriceStatus, TradeRows } from './InvestmentsPage';
@@ -31,12 +28,8 @@ export default function StockDetail() {
   const { symbol = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const inv = useInvestments();
-  const act = useAction();
   const [gran, setGran] = useState<Granularity>('1M');
   const [form, setForm] = useState<{ edit?: Trade } | null>(null);
-  const [manual, setManual] = useState(false);
-  const [mDate, setMDate] = useState(inv.today);
-  const [mClose, setMClose] = useState('');
 
   // 這支股票在各券商的持股；可以切換「全部」或某一家券商
   const rows = useMemo(() => inv.holdings.filter((x) => x.symbol === symbol), [inv.holdings, symbol]);
@@ -69,12 +62,6 @@ export default function StockDetail() {
   if (!view) return <Empty>沒有 {symbol} 的紀錄</Empty>;
   const { position: p, valuation: v } = view;
   const first = rows[0];
-
-  const saveManual = async () => {
-    const c = Number(mClose);
-    if (!(c > 0)) return;
-    if (await act(() => setManualClose(symbol, mDate, c), '已儲存股價')) setManual(false);
-  };
 
   return (
     <div className="space-y-4">
@@ -196,27 +183,6 @@ export default function StockDetail() {
         <h2 className="mb-2 font-semibold">交易紀錄</h2>
         <TradeRows trades={[...trades].reverse()} names={names} onEdit={(t) => setForm({ edit: t })} />
       </div>
-
-      <button className="btn w-full" onClick={() => setManual(true)}>
-        手動輸入股價
-      </button>
-
-      <Modal open={manual} onClose={() => setManual(false)} title={`手動輸入 ${symbol} 收盤價`}>
-        <p className="mb-3 text-sm text-slate-500">自動抓取失敗時使用。輸入的股價會存進共用的股價資料，其他使用者也看得到。</p>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="label">日期</label>
-            <input className="input" type="date" value={mDate} onChange={(e) => setMDate(e.target.value)} />
-          </div>
-          <div>
-            <label className="label">收盤價</label>
-            <input className="input" type="number" inputMode="decimal" step="any" value={mClose} onChange={(e) => setMClose(e.target.value)} />
-          </div>
-        </div>
-        <button className="btn-primary mt-3 w-full" onClick={saveManual}>
-          儲存
-        </button>
-      </Modal>
 
       {form && <TradeForm edit={form.edit} defaultSymbol={symbol} onClose={() => setForm(null)} />}
     </div>
